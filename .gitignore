@@ -29,5 +29,10 @@ build/
 !**/src/main/**/build/
 !**/src/test/**/build/
 
+### Secrets (never commit) ###
+.env
+.env.*
+!.env.example
+
 ### VS Code ###
 .vscode/
