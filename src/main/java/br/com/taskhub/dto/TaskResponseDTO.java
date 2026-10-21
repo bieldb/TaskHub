@@ -14,7 +14,9 @@ public record TaskResponseDTO(
                 Status status,
                 Priority priority,
                 LocalDate deadline,
-                UUID projectId
+                UUID projectId,
+                UUID assigneeId,
+                String assigneeName
 
 ) {
 

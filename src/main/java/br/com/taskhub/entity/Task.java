@@ -54,6 +54,11 @@ public class Task {
     @JoinColumn(name = "project_id", nullable = false)
     private Project project;
 
+    @ManyToOne (fetch = FetchType.LAZY)
+    @JoinColumn (name = "assignee_id")
+    @Setter 
+    private User assignee;
+
     public Task(String title, String description, Priority priority, LocalDate deadline,
             Project project) {
         this.title = title;

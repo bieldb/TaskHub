@@ -11,11 +11,15 @@ import br.com.taskhub.dto.TaskResponseDTO;
 import br.com.taskhub.entity.Project;
 import br.com.taskhub.entity.Status;
 import br.com.taskhub.entity.Task;
+import br.com.taskhub.entity.User;
+import br.com.taskhub.exception.ConflictException;
 import br.com.taskhub.exception.InvalidStatusTransitionException;
 import br.com.taskhub.exception.ResourceNotFoundException;
 import br.com.taskhub.mapper.TaskMapper;
+import br.com.taskhub.repository.ProjectMemberRepository;
 import br.com.taskhub.repository.ProjectRepository;
 import br.com.taskhub.repository.TaskRepository;
+import br.com.taskhub.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 
 @Service 
@@ -25,6 +29,8 @@ public class TaskService {
     private final TaskRepository taskRepository;
     private final TaskMapper taskMapper;
     private final ProjectRepository projectRepository;
+    private final UserRepository userRepository;
+    private final ProjectMemberRepository projectMemberRepository;
 
     @Transactional 
     public TaskResponseDTO updateStatus(UUID taskId, Status newStatus) {
@@ -42,6 +48,7 @@ public class TaskService {
         Project project = projectRepository.findById(projectId).orElseThrow(() -> new ResourceNotFoundException("Projeto", projectId));
 
         Task task = taskMapper.toEntity(dto, project);
+        task.setAssignee(resolveAssignee(projectId, dto.assigneeId()));
         Task saved = taskRepository.save(task);
         return taskMapper.toResponse(saved);
     }
@@ -52,5 +59,16 @@ public class TaskService {
             throw new ResourceNotFoundException("Projeto", projectId);
         }
         return taskRepository.findByProjectId(projectId).stream().map(taskMapper::toResponse).toList();
+    }
+
+    private User resolveAssignee(UUID projectId, UUID assigneeId) {
+        if(assigneeId == null) {
+            return null;
+        }
+        User assignee = userRepository.findById(assigneeId).orElseThrow(() -> new ResourceNotFoundException("Usuário", assigneeId));
+        if(!projectMemberRepository.existsByProjectIdAndUserId(projectId, assigneeId)) {
+            throw new ConflictException("O responsável precisa ser membro do projeto");
+        }
+        return assignee;
     }
 }
