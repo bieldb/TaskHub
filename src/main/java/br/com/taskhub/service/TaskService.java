@@ -1,13 +1,16 @@
 package br.com.taskhub.service;
 
-import java.util.List;
 import java.util.UUID;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import br.com.taskhub.dto.TaskRequestDTO;
 import br.com.taskhub.dto.TaskResponseDTO;
+import br.com.taskhub.entity.Priority;
 import br.com.taskhub.entity.Project;
 import br.com.taskhub.entity.Status;
 import br.com.taskhub.entity.Task;
@@ -19,6 +22,7 @@ import br.com.taskhub.mapper.TaskMapper;
 import br.com.taskhub.repository.ProjectMemberRepository;
 import br.com.taskhub.repository.ProjectRepository;
 import br.com.taskhub.repository.TaskRepository;
+import br.com.taskhub.repository.TaskSpecifications;
 import br.com.taskhub.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 
@@ -54,11 +58,21 @@ public class TaskService {
     }
 
     @Transactional (readOnly = true)
-    public List<TaskResponseDTO> listByProject(UUID projectId) {
+    public Page<TaskResponseDTO> listByProject(UUID projectId, Status status, Priority priority, UUID assigneeId, Pageable pageable) {
         if(!projectRepository.existsById(projectId)) {
             throw new ResourceNotFoundException("Projeto", projectId);
         }
-        return taskRepository.findByProjectId(projectId).stream().map(taskMapper::toResponse).toList();
+        Specification<Task> spec = TaskSpecifications.belongsToProject(projectId);
+        if(status != null) {
+            spec = spec.and(TaskSpecifications.hasStatus(status));
+        }
+        if(priority != null) {
+            spec = spec.and(TaskSpecifications.hasPriority(priority));
+        }
+        if(assigneeId != null) {
+            spec = spec.and(TaskSpecifications.hasAssignee(assigneeId));
+        }
+        return taskRepository.findAll(spec, pageable).map(taskMapper::toResponse);
     }
 
     private User resolveAssignee(UUID projectId, UUID assigneeId) {
