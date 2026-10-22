@@ -1,9 +1,8 @@
 package br.com.taskhub.entity;
 
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
-
-import org.hibernate.annotations.CreationTimestamp;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -13,6 +12,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.PrePersist;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
@@ -46,7 +46,6 @@ public class ProjectMember {
     @Column (name = "role", nullable = false, length = 20)
     private ProjectRole role;
 
-    @CreationTimestamp 
     @Column (name = "joined_at", nullable = false, updatable = false)
     private LocalDateTime joinedAt;
 
@@ -56,5 +55,8 @@ public class ProjectMember {
         this.role = role;
     }
 
-    
+    @PrePersist
+    void onCreate() {
+        this.joinedAt = LocalDateTime.now().truncatedTo(ChronoUnit.MICROS);
+    }
 }

@@ -10,6 +10,7 @@ combinados e erros padronizados no formato `ProblemDetail` (RFC 9457).
 - PostgreSQL 17 (via Docker Compose) e Flyway
 - MapStruct e Lombok
 - springdoc-openapi (Swagger UI)
+- JUnit 5, Mockito, AssertJ, MockMvc, Testcontainers e JaCoCo
 
 ## Como rodar
 
@@ -305,9 +306,42 @@ select count(t1_0.id) from tasks t1_0 where t1_0.project_id=?
 usuário, então o join não multiplica linhas e o `offset`/`fetch first` continua sendo aplicado no banco. Com uma coleção
 (`@OneToMany`), o Hibernate teria que buscar tudo e paginar em memória.
 
+## Testes
+
+```bash
+./mvnw verify                        # todos os testes + relatório e verificação de cobertura
+./mvnw test -Dtest='*ServiceTest'    # só os unitários (rápidos, sem Docker)
+```
+
+Os testes de integração sobem um PostgreSQL 17 descartável com Testcontainers, então precisam só do Docker rodando.
+Não usam o banco do `docker compose` nem o `.env`.
+
+São 84 testes em três camadas. Cada uma testa só a sua responsabilidade:
+
+| Camada | Ferramentas | Testes | O que verifica |
+|---|---|---|---|
+| Service (unitário) | JUnit 5, Mockito, AssertJ | 30 | Regras de negócio com repositories e mappers simulados: 404, 409, `DONE → TODO`, responsável membro do projeto, normalização do e-mail, e que nada é gravado quando a regra falha |
+| Controller | `@WebMvcTest`, MockMvc, `@MockitoBean` | 42 | Contrato HTTP: status, header `Location`, corpo do `ProblemDetail` (`title`, `detail`, `errors`), validação, enum inválido, paginação padrão e limite de `size`, e que requisição inválida não chega ao service |
+| Integração | `@SpringBootTest`, MockMvc, Testcontainers | 12 | Fluxo completo contra o PostgreSQL real com as migrations do Flyway: ciclo de status, filtros combinados com paginação, `CASCADE` ao excluir projeto, unicidade do e-mail ignorando maiúsculas |
+
+Decisões:
+
+- **Isolamento.** Nos testes de integração, as tabelas são truncadas antes de cada teste. Nenhum teste depende de
+  dados ou da ordem de outro.
+- **Um contexto e um container para todos.** Os testes de integração herdam de `AbstractIntegrationTest`, então o
+  Spring reaproveita o mesmo contexto e o mesmo container em todas as classes.
+- **Dados criados pela API.** Os testes de integração montam o cenário com as mesmas requisições que um cliente faria,
+  em vez de inserir direto no banco.
+- **Cobertura obrigatória.** O JaCoCo gera o relatório em `target/site/jacoco/index.html` e **o build falha** se a
+  cobertura de linhas do pacote `service` cair abaixo de 80%. Hoje está em 100% de linhas e de branches.
+
+**Bug encontrado pelos testes de integração.** Os `POST` de projeto, usuário e membro devolviam `createdAt`/`joinedAt`
+como `null`. O `@CreationTimestamp` do Hibernate só preenche o campo no `INSERT`, que acontece no flush ao final da
+transação, depois que a resposta já tinha sido montada. No banco o valor era gravado certo, por isso o `GET` funcionava
+e os testes com mocks não perceberam. A data agora é preenchida em um `@PrePersist`, que roda já no `save`, truncada em
+microssegundos (a precisão do `TIMESTAMP` do PostgreSQL) para o `POST` e o `GET` devolverem o mesmo valor.
+
 ## Próximos passos
 
-- Testes automatizados: unitários dos services (JUnit 5 + Mockito), de controller (`@WebMvcTest`) e de integração com
-  Testcontainers (PostgreSQL real), com cobertura medida pelo JaCoCo.
 - Dockerfile multi-stage da API, Docker Compose com healthcheck do banco, Actuator, GitHub Actions e Dependabot.
 - Autenticação e autorização usando os papéis de `project_members`.
