@@ -1,0 +1,17 @@
+# Só entra no contexto de build o necessário para compilar (mvnw, .mvn, pom.xml, src).
+target/
+.git/
+.github/
+.vscode/
+.idea/
+.claude/
+
+# Segredos nunca entram na imagem.
+.env
+.env.*
+
+*.md
+*.txt
+docker-compose.yml
+Dockerfile
+.dockerignore
