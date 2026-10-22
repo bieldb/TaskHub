@@ -1,15 +1,15 @@
 package br.com.taskhub.entity;
 
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
-
-import org.hibernate.annotations.CreationTimestamp;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -35,7 +35,6 @@ public class Project {
     private String description;
 
     @Column (name = "created_at", nullable = false, updatable = false)
-    @CreationTimestamp 
     private LocalDateTime createdAt;
 
     public Project(String name, String description) {
@@ -43,5 +42,8 @@ public class Project {
         this.description = description;
     }
 
-    
+    @PrePersist
+    void onCreate() {
+        this.createdAt = LocalDateTime.now().truncatedTo(ChronoUnit.MICROS);
+    }
 }
