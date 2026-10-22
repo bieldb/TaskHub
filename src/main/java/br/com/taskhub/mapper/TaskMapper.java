@@ -14,8 +14,11 @@ public interface TaskMapper {
 
     @Mapping (target = "id", ignore = true)
     @Mapping (target = "description", source = "dto.description")
+    @Mapping (target = "assignee", ignore = true)
     Task toEntity(TaskRequestDTO dto, Project project);
 
     @Mapping (target = "projectId", source = "project.id")
+    @Mapping (target = "assigneeId", source = "assignee.id")
+    @Mapping (target = "assigneeName", source = "assignee.name")
     TaskResponseDTO toResponse(Task task);
 }
