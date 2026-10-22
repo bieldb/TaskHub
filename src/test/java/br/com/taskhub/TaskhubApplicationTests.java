@@ -1,12 +1,9 @@
 package br.com.taskhub;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 
-@SpringBootTest
-@Import(TestcontainersConfiguration.class)
-class TaskhubApplicationTests {
+// Herda a mesma configuração dos testes de integração para reaproveitar o contexto e o container.
+class TaskhubApplicationTests extends AbstractIntegrationTest {
 
 	@Test
 	void contextLoads() {
