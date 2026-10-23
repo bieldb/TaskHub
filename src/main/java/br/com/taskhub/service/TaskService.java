@@ -5,11 +5,14 @@ import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import br.com.taskhub.audit.AuditEvent;
 import br.com.taskhub.dto.TaskRequestDTO;
 import br.com.taskhub.dto.TaskResponseDTO;
+import br.com.taskhub.entity.AuditEntityType;
 import br.com.taskhub.entity.Priority;
 import br.com.taskhub.entity.Project;
 import br.com.taskhub.entity.Status;
@@ -35,6 +38,7 @@ public class TaskService {
     private final ProjectRepository projectRepository;
     private final UserRepository userRepository;
     private final ProjectMemberRepository projectMemberRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional 
     public TaskResponseDTO updateStatus(UUID taskId, Status newStatus) {
@@ -43,8 +47,11 @@ public class TaskService {
         if(task.getStatus() == Status.DONE && newStatus == Status.TODO) {
             throw new InvalidStatusTransitionException("Uma tarefa concluída não pode voltar para TODO");
         }
+        TaskResponseDTO before = taskMapper.toResponse(task);
         task.changeStatus(newStatus);
-        return taskMapper.toResponse(task);
+        TaskResponseDTO after = taskMapper.toResponse(task);
+        eventPublisher.publishEvent(AuditEvent.updated(AuditEntityType.TASK, taskId, before, after));
+        return after;
     }
 
     @Transactional 
@@ -54,7 +61,9 @@ public class TaskService {
         Task task = taskMapper.toEntity(dto, project);
         task.setAssignee(resolveAssignee(projectId, dto.assigneeId()));
         Task saved = taskRepository.save(task);
-        return taskMapper.toResponse(saved);
+        TaskResponseDTO response = taskMapper.toResponse(saved);
+        eventPublisher.publishEvent(AuditEvent.created(AuditEntityType.TASK, saved.getId(), response));
+        return response;
     }
 
     @Transactional (readOnly = true)
