@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- Build: compila e gera o jar com o JDK completo ----
-FROM eclipse-temurin:21-jdk AS build
+FROM eclipse-temurin:25-jdk AS build
 WORKDIR /workspace
 
 # Dependências primeiro: enquanto o pom.xml não mudar, essa camada vem do cache.
@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/root/.m2 ./mvnw -B -q package -DskipTests
 RUN java -Djarmode=tools -jar target/taskhub-*.jar extract --layers --launcher --destination target/extracted
 
 # ---- Runtime: só o JRE, sem Maven nem código-fonte ----
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:25-jre
 WORKDIR /app
 
 RUN groupadd --system spring && useradd --system --gid spring --no-create-home spring
