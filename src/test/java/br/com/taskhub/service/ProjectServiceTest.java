@@ -15,16 +15,23 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.test.util.ReflectionTestUtils;
 
+import br.com.taskhub.audit.AuditEvent;
 import br.com.taskhub.dto.ProjectRequestDTO;
 import br.com.taskhub.dto.ProjectResponseDTO;
+import br.com.taskhub.entity.AuditAction;
+import br.com.taskhub.entity.AuditEntityType;
 import br.com.taskhub.entity.Project;
 import br.com.taskhub.exception.ResourceNotFoundException;
 import br.com.taskhub.mapper.ProjectMapper;
@@ -39,8 +46,14 @@ class ProjectServiceTest {
     @Mock
     private ProjectMapper projectMapper;
 
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+
     @InjectMocks
     private ProjectService projectService;
+
+    @Captor
+    private ArgumentCaptor<AuditEvent> eventCaptor;
 
     private UUID projectId;
     private Project project;
@@ -51,6 +64,7 @@ class ProjectServiceTest {
     void setUp() {
         projectId = UUID.randomUUID();
         project = new Project("Projeto", "Descrição");
+        ReflectionTestUtils.setField(project, "id", projectId);
         request = new ProjectRequestDTO("Projeto", "Descrição");
         response = new ProjectResponseDTO(projectId, "Projeto", "Descrição", LocalDateTime.now());
     }
@@ -64,6 +78,8 @@ class ProjectServiceTest {
         ProjectResponseDTO result = projectService.create(request);
 
         assertThat(result).isEqualTo(response);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue()).isEqualTo(new AuditEvent(AuditEntityType.PROJECT, projectId, AuditAction.CREATE, null, response));
     }
 
     @Test
@@ -100,13 +116,16 @@ class ProjectServiceTest {
     @Test
     void shouldUpdateProjectWithoutCallingSave() {
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
-        when(projectMapper.toResponse(project)).thenReturn(response);
+        ProjectResponseDTO before = new ProjectResponseDTO(projectId, "Antigo", null, response.createdAt());
+        when(projectMapper.toResponse(project)).thenReturn(before, response);
 
         ProjectResponseDTO result = projectService.update(projectId, request);
 
         assertThat(result).isEqualTo(response);
         verify(projectMapper).updateEntity(request, project);
         verify(projectRepository, never()).save(any());
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue()).isEqualTo(new AuditEvent(AuditEntityType.PROJECT, projectId, AuditAction.UPDATE, before, response));
     }
 
     @Test
@@ -116,15 +135,19 @@ class ProjectServiceTest {
         assertThatThrownBy(() -> projectService.update(projectId, request))
                 .isInstanceOf(ResourceNotFoundException.class);
         verify(projectMapper, never()).updateEntity(any(), any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
     void shouldDeleteProject() {
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(projectMapper.toResponse(project)).thenReturn(response);
 
         projectService.delete(projectId);
 
         verify(projectRepository).delete(project);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue()).isEqualTo(new AuditEvent(AuditEntityType.PROJECT, projectId, AuditAction.DELETE, response, null));
     }
 
     @Test
@@ -134,5 +157,6 @@ class ProjectServiceTest {
         assertThatThrownBy(() -> projectService.delete(projectId))
                 .isInstanceOf(ResourceNotFoundException.class);
         verify(projectRepository, never()).delete(any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 }

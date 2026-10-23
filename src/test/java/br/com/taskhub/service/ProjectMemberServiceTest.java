@@ -20,9 +20,13 @@ import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
+import br.com.taskhub.audit.AuditEvent;
 import br.com.taskhub.dto.ProjectMemberRequestDTO;
 import br.com.taskhub.dto.ProjectMemberResponseDTO;
+import br.com.taskhub.entity.AuditAction;
+import br.com.taskhub.entity.AuditEntityType;
 import br.com.taskhub.entity.Project;
 import br.com.taskhub.entity.ProjectMember;
 import br.com.taskhub.entity.ProjectRole;
@@ -49,8 +53,14 @@ class ProjectMemberServiceTest {
     @Mock
     private ProjectMemberMapper projectMemberMapper;
 
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+
     @InjectMocks
     private ProjectMemberService projectMemberService;
+
+    @Captor
+    private ArgumentCaptor<AuditEvent> eventCaptor;
 
     @Captor
     private ArgumentCaptor<ProjectMember> memberCaptor;
@@ -88,6 +98,11 @@ class ProjectMemberServiceTest {
         assertThat(memberCaptor.getValue().getProject()).isSameAs(project);
         assertThat(memberCaptor.getValue().getUser()).isSameAs(user);
         assertThat(memberCaptor.getValue().getRole()).isEqualTo(ProjectRole.MEMBER);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().entityType()).isEqualTo(AuditEntityType.PROJECT_MEMBER);
+        assertThat(eventCaptor.getValue().action()).isEqualTo(AuditAction.CREATE);
+        assertThat(eventCaptor.getValue().oldValue()).isNull();
+        assertThat(eventCaptor.getValue().newValue()).isEqualTo(response);
     }
 
     @Test
@@ -98,6 +113,7 @@ class ProjectMemberServiceTest {
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining(projectId.toString());
         verify(projectMemberRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
@@ -109,6 +125,7 @@ class ProjectMemberServiceTest {
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining(userId.toString());
         verify(projectMemberRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
@@ -121,6 +138,7 @@ class ProjectMemberServiceTest {
                 .isInstanceOf(ConflictException.class)
                 .hasMessage("Usuário já é membro do projeto");
         verify(projectMemberRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test

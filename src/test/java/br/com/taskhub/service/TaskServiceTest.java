@@ -17,17 +17,24 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.test.util.ReflectionTestUtils;
 
+import br.com.taskhub.audit.AuditEvent;
 import br.com.taskhub.dto.TaskRequestDTO;
 import br.com.taskhub.dto.TaskResponseDTO;
+import br.com.taskhub.entity.AuditAction;
+import br.com.taskhub.entity.AuditEntityType;
 import br.com.taskhub.entity.Priority;
 import br.com.taskhub.entity.Project;
 import br.com.taskhub.entity.Status;
@@ -60,8 +67,14 @@ class TaskServiceTest {
     @Mock
     private ProjectMemberRepository projectMemberRepository;
 
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+
     @InjectMocks
     private TaskService taskService;
+
+    @Captor
+    private ArgumentCaptor<AuditEvent> eventCaptor;
 
     private UUID projectId;
     private UUID taskId;
@@ -77,6 +90,7 @@ class TaskServiceTest {
         userId = UUID.randomUUID();
         project = new Project("Projeto", "Descrição");
         task = new Task("Tarefa", "Descrição", Priority.HIGH, LocalDate.now().plusDays(1), project);
+        ReflectionTestUtils.setField(task, "id", taskId);
         response = new TaskResponseDTO(taskId, "Tarefa", "Descrição", Status.TODO, Priority.HIGH,
                 LocalDate.now().plusDays(1), projectId, null, null);
     }
@@ -99,6 +113,8 @@ class TaskServiceTest {
         assertThat(result).isEqualTo(response);
         assertThat(task.getAssignee()).isNull();
         verifyNoInteractions(userRepository, projectMemberRepository);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue()).isEqualTo(new AuditEvent(AuditEntityType.TASK, taskId, AuditAction.CREATE, null, response));
     }
 
     @Test
@@ -125,6 +141,7 @@ class TaskServiceTest {
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining(projectId.toString());
         verify(taskRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
@@ -138,6 +155,7 @@ class TaskServiceTest {
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining(userId.toString());
         verify(taskRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
@@ -152,17 +170,22 @@ class TaskServiceTest {
                 .isInstanceOf(ConflictException.class)
                 .hasMessage("O responsável precisa ser membro do projeto");
         verify(taskRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
 
     @Test
     void shouldUpdateTaskStatus() {
         when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
-        when(taskMapper.toResponse(task)).thenReturn(response);
+        TaskResponseDTO after = new TaskResponseDTO(taskId, "Tarefa", "Descrição", Status.IN_PROGRESS, Priority.HIGH,
+                response.deadline(), projectId, null, null);
+        when(taskMapper.toResponse(task)).thenReturn(response, after);
 
         taskService.updateStatus(taskId, Status.IN_PROGRESS);
 
         assertThat(task.getStatus()).isEqualTo(Status.IN_PROGRESS);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue()).isEqualTo(new AuditEvent(AuditEntityType.TASK, taskId, AuditAction.UPDATE, response, after));
     }
 
     @Test
@@ -174,6 +197,7 @@ class TaskServiceTest {
                 .isInstanceOf(InvalidStatusTransitionException.class)
                 .hasMessage("Uma tarefa concluída não pode voltar para TODO");
         assertThat(task.getStatus()).isEqualTo(Status.DONE);
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
@@ -194,6 +218,7 @@ class TaskServiceTest {
         assertThatThrownBy(() -> taskService.updateStatus(taskId, Status.DONE))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining(taskId.toString());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
 

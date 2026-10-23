@@ -18,9 +18,13 @@ import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
+import br.com.taskhub.audit.AuditEvent;
 import br.com.taskhub.dto.UserRequestDTO;
 import br.com.taskhub.dto.UserResponseDTO;
+import br.com.taskhub.entity.AuditAction;
+import br.com.taskhub.entity.AuditEntityType;
 import br.com.taskhub.entity.User;
 import br.com.taskhub.exception.ConflictException;
 import br.com.taskhub.exception.ResourceNotFoundException;
@@ -36,8 +40,14 @@ class UserServiceTest {
     @Mock
     private UserMapper userMapper;
 
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+
     @InjectMocks
     private UserService userService;
+
+    @Captor
+    private ArgumentCaptor<AuditEvent> eventCaptor;
 
     @Captor
     private ArgumentCaptor<User> userCaptor;
@@ -55,6 +65,11 @@ class UserServiceTest {
         verify(userRepository).save(userCaptor.capture());
         assertThat(userCaptor.getValue().getName()).isEqualTo("Ana");
         assertThat(userCaptor.getValue().getEmail()).isEqualTo("ana@email.com");
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().entityType()).isEqualTo(AuditEntityType.USER);
+        assertThat(eventCaptor.getValue().action()).isEqualTo(AuditAction.CREATE);
+        assertThat(eventCaptor.getValue().oldValue()).isNull();
+        assertThat(eventCaptor.getValue().newValue()).isEqualTo(response);
     }
 
     @Test
@@ -65,6 +80,7 @@ class UserServiceTest {
                 .isInstanceOf(ConflictException.class)
                 .hasMessageContaining("ana@email.com");
         verify(userRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
