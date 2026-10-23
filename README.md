@@ -4,7 +4,8 @@
 
 API REST de gestão de tarefas para equipes: projetos, tarefas, usuários e membros de projeto.
 Construída com Spring Boot e PostgreSQL, com schema versionado por Flyway, listagem paginada com filtros
-combinados e erros padronizados no formato `ProblemDetail` (RFC 9457).
+combinados, erros padronizados no formato `ProblemDetail` (RFC 9457) e trilha de auditoria de toda criação,
+alteração e exclusão.
 
 ## Stack
 
@@ -106,6 +107,38 @@ A resposta paginada traz o conteúdo e os metadados:
 | `POST` | `/projects/{projectId}/members` | Adiciona um usuário ao projeto com papel `OWNER`, `MEMBER` ou `VIEWER` |
 | `GET` | `/projects/{projectId}/members` | Lista os membros do projeto |
 
+### Auditoria
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/audit-logs` | Lista os registros de auditoria, paginados (padrão: 20 por página, mais recentes primeiro) |
+
+Parâmetros opcionais e combináveis: `entityType` (`PROJECT`, `TASK`, `USER`, `PROJECT_MEMBER`), `entityId` (UUID) e
+`action` (`CREATE`, `UPDATE`, `DELETE`). Todas as requisições de escrita aceitam o header `X-User-Id`, gravado como
+autor da operação (veja [Auditoria](#auditoria-1)).
+
+```http
+GET /audit-logs?entityType=TASK&entityId={taskId}&action=UPDATE
+```
+
+```json
+{
+  "content": [
+    {
+      "id": "...",
+      "entityType": "TASK",
+      "entityId": "...",
+      "action": "UPDATE",
+      "actor": "ana",
+      "oldValue": { "id": "...", "title": "...", "status": "TODO", "...": "..." },
+      "newValue": { "id": "...", "title": "...", "status": "IN_PROGRESS", "...": "..." },
+      "occurredAt": "2026-10-23T14:05:12.345678"
+    }
+  ],
+  "page": { "size": 20, "number": 0, "totalElements": 1, "totalPages": 1 }
+}
+```
+
 ### Erros
 
 Todos os erros seguem o formato `ProblemDetail` (`type`, `title`, `status`, `detail`, `instance`):
@@ -164,7 +197,20 @@ erDiagram
         varchar role "OWNER | MEMBER | VIEWER"
         timestamp joined_at
     }
+    AUDIT_LOG {
+        uuid id PK
+        varchar entity_type "PROJECT | TASK | USER | PROJECT_MEMBER"
+        uuid entity_id "sem FK"
+        varchar action "CREATE | UPDATE | DELETE"
+        varchar actor
+        jsonb old_value "null no CREATE"
+        jsonb new_value "null no DELETE"
+        timestamp occurred_at
+    }
 ```
+
+A `audit_log` não tem relacionamento com as outras tabelas de propósito: o registro precisa continuar existindo depois
+que a entidade auditada é excluída.
 
 O schema é criado e evoluído só por migrations Flyway (`src/main/resources/db/migration`):
 
@@ -176,6 +222,7 @@ O schema é criado e evoluído só por migrations Flyway (`src/main/resources/db
 | `V4__create_project_members.sql` | Tabela `project_members` com `UNIQUE (project_id, user_id)` |
 | `V5__add_assignee_to_tasks.sql` | Coluna opcional `tasks.assignee_id` |
 | `V6__create_task_indexes.sql` | Índices das colunas filtradas na listagem de tarefas |
+| `V7__create_audit_log.sql` | Tabela `audit_log` com `CHECK` de entidade e ação e índice `(entity_type, entity_id, occurred_at DESC)` |
 
 ## Decisões de design
 
@@ -340,6 +387,55 @@ select count(t1_0.id) from tasks t1_0 where t1_0.project_id=?
 usuário, então o join não multiplica linhas e o `offset`/`fetch first` continua sendo aplicado no banco. Com uma coleção
 (`@OneToMany`), o Hibernate teria que buscar tudo e paginar em memória.
 
+## Auditoria
+
+Toda criação, alteração e exclusão gera uma linha na tabela `audit_log` com **quem** (`actor`), **o quê**
+(`entity_type`, `entity_id` e `action`), **quando** (`occurred_at`) e os valores **antigo** e **novo** (`old_value` e
+`new_value`, em `JSONB`).
+
+| Operação | Ação | Valor antigo | Valor novo |
+|---|---|---|---|
+| `POST /projects` | `CREATE` | — | projeto criado |
+| `PUT /projects/{id}` | `UPDATE` | projeto antes da alteração | projeto depois da alteração |
+| `DELETE /projects/{id}` | `DELETE` | projeto antes da exclusão | — |
+| `POST /projects/{projectId}/tasks` | `CREATE` | — | tarefa criada |
+| `PATCH /tasks/{id}/status` | `UPDATE` | tarefa com o status anterior | tarefa com o status novo |
+| `POST /users` | `CREATE` | — | usuário criado |
+| `POST /projects/{projectId}/members` | `CREATE` | — | membro adicionado |
+
+### Como funciona
+
+1. O service termina a operação e publica um `AuditEvent` com o `ApplicationEventPublisher` do Spring.
+2. O `AuditEventListener` recebe o evento com `@TransactionalEventListener(phase = BEFORE_COMMIT)`, converte os valores
+   para JSON e grava o `AuditLog`.
+3. O autor vem do `ActorProvider`. A implementação atual, `HeaderActorProvider`, lê o header `X-User-Id`. Sem o header,
+   grava `anonymous`; fora de uma requisição HTTP, grava `system`.
+
+### Decisões
+
+- **Eventos do Spring em vez do Hibernate Envers.** O Envers cria uma tabela `_aud` por entidade e guarda versões
+  completas das linhas. Aqui o objetivo é uma tabela única, consultável por entidade, com o valor antigo e o novo lado
+  a lado. Os eventos também deixam os services sem dependência da auditoria: eles só avisam que algo aconteceu.
+- **`BEFORE_COMMIT`, na mesma transação da operação.** O log é gravado só se a operação for confirmada, e um rollback
+  desfaz os dois juntos. Por isso uma operação que falha (404, 409) não deixa rastro. Um `AFTER_COMMIT` poderia
+  perder o log se a aplicação caísse entre o commit e a gravação, e um listener comum (`@EventListener`) gravaria o log
+  mesmo de uma operação que fosse desfeita depois.
+- **O DTO de resposta como snapshot.** Os valores gravados são os mesmos DTOs que a API devolve, com o mesmo formato e
+  sem dados internos da entidade. O valor antigo é capturado antes de a entidade ser alterada.
+- **Sem FK para as entidades.** O log de um projeto excluído continua consultável pelo `entity_id`.
+- **`JSONB`.** Permite consultar dentro dos valores direto no PostgreSQL, por exemplo
+  `WHERE new_value ->> 'status' = 'DONE'`. Na resposta da API, os valores saem como objetos JSON (`@JsonRawValue`), e
+  não como texto escapado.
+- **Índice `(entity_type, entity_id, occurred_at DESC)`.** Atende a consulta mais comum, o histórico de uma entidade
+  do mais recente para o mais antigo.
+
+### Limitações
+
+- **O `X-User-Id` é provisório.** O cliente informa quem ele é, então o valor não é confiável. Quando houver
+  autenticação, só o `ActorProvider` muda para ler o usuário do token; os services e o listener continuam iguais.
+- **Exclusões em cascata não geram linhas próprias.** Ao excluir um projeto, as tarefas e os membros são apagados
+  pelo `ON DELETE CASCADE` do banco, sem passar pelos services. O registro do `DELETE` guarda só o projeto.
+
 ## Testes
 
 ```bash
@@ -350,13 +446,13 @@ usuário, então o join não multiplica linhas e o `offset`/`fetch first` contin
 Os testes de integração sobem um PostgreSQL 17 descartável com Testcontainers, então precisam só do Docker rodando.
 Não usam o banco do `docker compose` nem o `.env`.
 
-São 87 testes em três camadas. Cada uma testa só a sua responsabilidade:
+São 107 testes em três camadas. Cada uma testa só a sua responsabilidade:
 
 | Camada | Ferramentas | Testes | O que verifica |
 |---|---|---|---|
-| Service (unitário) | JUnit 5, Mockito, AssertJ | 30 | Regras de negócio com repositories e mappers simulados: 404, 409, `DONE → TODO`, responsável membro do projeto, normalização do e-mail, e que nada é gravado quando a regra falha |
-| Controller | `@WebMvcTest`, MockMvc, `@MockitoBean` | 42 | Contrato HTTP: status, header `Location`, corpo do `ProblemDetail` (`title`, `detail`, `errors`), validação, enum inválido, paginação padrão e limite de `size`, e que requisição inválida não chega ao service |
-| Integração | `@SpringBootTest`, MockMvc, Testcontainers | 15 | Fluxo completo contra o PostgreSQL real com as migrations do Flyway: ciclo de status, filtros combinados com paginação, `CASCADE` ao excluir projeto, unicidade do e-mail ignorando maiúsculas, endpoints do Actuator |
+| Unitário | JUnit 5, Mockito, AssertJ | 40 | Regras de negócio com repositories e mappers simulados: 404, 409, `DONE → TODO`, responsável membro do projeto, normalização do e-mail, o evento de auditoria publicado com os valores certos, e que nada é gravado nem publicado quando a regra falha. Também o listener de auditoria e a leitura do autor pelo header |
+| Controller | `@WebMvcTest`, MockMvc, `@MockitoBean` | 46 | Contrato HTTP: status, header `Location`, corpo do `ProblemDetail` (`title`, `detail`, `errors`), validação, enum inválido, paginação padrão e limite de `size`, valores da auditoria como objetos JSON, e que requisição inválida não chega ao service |
+| Integração | `@SpringBootTest`, MockMvc, Testcontainers | 21 | Fluxo completo contra o PostgreSQL real com as migrations do Flyway: ciclo de status, filtros combinados com paginação, `CASCADE` ao excluir projeto, unicidade do e-mail ignorando maiúsculas, endpoints do Actuator, e a auditoria de ponta a ponta (autor, valores antigo e novo, nenhum registro quando a operação falha, registro mantido após a exclusão) |
 
 Decisões:
 
@@ -401,4 +497,5 @@ Cada PR passa pelo CI antes do merge.
 
 ## Próximos passos
 
-- Autenticação e autorização usando os papéis de `project_members`.
+- Autenticação e autorização usando os papéis de `project_members`. O autor da auditoria passa a vir do usuário
+  autenticado, no lugar do header `X-User-Id`.
