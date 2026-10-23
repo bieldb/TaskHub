@@ -31,7 +31,7 @@ public abstract class AbstractIntegrationTest {
 
     @BeforeEach
     void cleanDatabase() {
-        jdbcTemplate.execute("TRUNCATE TABLE tasks, project_members, projects, users");
+        jdbcTemplate.execute("TRUNCATE TABLE audit_log, tasks, project_members, projects, users");
     }
 
     protected UUID createProject(String name) throws Exception {
