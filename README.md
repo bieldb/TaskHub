@@ -1,34 +1,58 @@
 # TaskHub
 
+[![CI](https://github.com/bieldb/TaskHub/actions/workflows/ci.yml/badge.svg)](https://github.com/bieldb/TaskHub/actions/workflows/ci.yml)
+
 API REST de gestão de tarefas para equipes: projetos, tarefas, usuários e membros de projeto.
 Construída com Spring Boot e PostgreSQL, com schema versionado por Flyway, listagem paginada com filtros
 combinados e erros padronizados no formato `ProblemDetail` (RFC 9457).
 
 ## Stack
 
-- Java 21 e Spring Boot 4.1 (Web MVC, Data JPA, Validation)
-- PostgreSQL 17 (via Docker Compose) e Flyway
+- Java 21 e Spring Boot 4.1 (Web MVC, Data JPA, Validation, Actuator)
+- PostgreSQL 17 e Flyway
 - MapStruct e Lombok
 - springdoc-openapi (Swagger UI)
 - JUnit 5, Mockito, AssertJ, MockMvc, Testcontainers e JaCoCo
+- Docker (multi-stage) e Docker Compose
+- GitHub Actions e Dependabot
 
 ## Como rodar
+
+Primeiro, crie o `.env` (ele não é versionado) e preencha o usuário e a senha do banco:
+
+```bash
+cp .env.example .env
+```
+
+### Tudo com Docker
+
+Pré-requisito: só o Docker.
+
+```bash
+docker compose up -d --build
+```
+
+O Compose sobe o PostgreSQL e, só depois que o banco passa no healthcheck (`pg_isready`), a API. O Flyway aplica as
+migrations na subida. Para acompanhar: `docker compose ps` mostra os dois serviços como `healthy`, e
+`docker compose logs -f api` mostra os logs da API.
+
+### Desenvolvimento local
 
 Pré-requisitos: JDK 21 e Docker.
 
 ```bash
-# 1. Variáveis de ambiente (o .env não é versionado)
-cp .env.example .env          # preencha usuário e senha do banco
-
-# 2. Banco de dados
-docker compose up -d          # PostgreSQL na porta 5433
-
-# 3. API (o Flyway aplica as migrations na subida)
-./mvnw spring-boot:run
+docker compose up -d postgres   # só o banco, na porta 5433
+./mvnw spring-boot:run          # API pela JVM local, perfil dev (log de SQL ligado)
 ```
 
+Os dois modos usam a porta 8080. Para trocar de um para o outro, pare a API do Compose com `docker compose stop api`.
+
+### Endereços
+
+- API: http://localhost:8080
 - Swagger UI: http://localhost:8080/swagger-ui.html
-- Para recriar o banco do zero: `docker compose down -v && docker compose up -d`
+- Health: http://localhost:8080/actuator/health
+- Para recriar o banco do zero (apaga os dados): `docker compose down -v`
 
 ## Endpoints
 
@@ -91,6 +115,16 @@ Todos os erros seguem o formato `ProblemDetail` (`type`, `title`, `status`, `det
 | `400` | Validação do corpo (com a lista `errors` por campo), JSON malformado, enum inválido, ordenação por campo inexistente |
 | `404` | Projeto, tarefa ou usuário não encontrado |
 | `409` | Tarefa `DONE` voltando para `TODO`, e-mail já cadastrado, usuário já é membro, responsável que não é membro do projeto, violação de restrição no banco |
+
+### Monitoramento (Actuator)
+
+| Endpoint | Para que serve |
+|---|---|
+| `GET /actuator/health` | Situação geral da aplicação e do banco |
+| `GET /actuator/health/liveness` | Se o processo está de pé. Se falhar, o container deve ser reiniciado |
+| `GET /actuator/health/readiness` | Se a API está pronta para receber tráfego, incluindo a conexão com o banco. É o que o healthcheck do container usa |
+| `GET /actuator/info` | Nome, versão e grupo do build |
+| `GET /actuator/metrics` | Métricas da JVM, do HTTP e do pool de conexões |
 
 ## Modelo de dados
 
@@ -316,13 +350,13 @@ usuário, então o join não multiplica linhas e o `offset`/`fetch first` contin
 Os testes de integração sobem um PostgreSQL 17 descartável com Testcontainers, então precisam só do Docker rodando.
 Não usam o banco do `docker compose` nem o `.env`.
 
-São 84 testes em três camadas. Cada uma testa só a sua responsabilidade:
+São 87 testes em três camadas. Cada uma testa só a sua responsabilidade:
 
 | Camada | Ferramentas | Testes | O que verifica |
 |---|---|---|---|
 | Service (unitário) | JUnit 5, Mockito, AssertJ | 30 | Regras de negócio com repositories e mappers simulados: 404, 409, `DONE → TODO`, responsável membro do projeto, normalização do e-mail, e que nada é gravado quando a regra falha |
 | Controller | `@WebMvcTest`, MockMvc, `@MockitoBean` | 42 | Contrato HTTP: status, header `Location`, corpo do `ProblemDetail` (`title`, `detail`, `errors`), validação, enum inválido, paginação padrão e limite de `size`, e que requisição inválida não chega ao service |
-| Integração | `@SpringBootTest`, MockMvc, Testcontainers | 12 | Fluxo completo contra o PostgreSQL real com as migrations do Flyway: ciclo de status, filtros combinados com paginação, `CASCADE` ao excluir projeto, unicidade do e-mail ignorando maiúsculas |
+| Integração | `@SpringBootTest`, MockMvc, Testcontainers | 15 | Fluxo completo contra o PostgreSQL real com as migrations do Flyway: ciclo de status, filtros combinados com paginação, `CASCADE` ao excluir projeto, unicidade do e-mail ignorando maiúsculas, endpoints do Actuator |
 
 Decisões:
 
@@ -341,7 +375,30 @@ transação, depois que a resposta já tinha sido montada. No banco o valor era 
 e os testes com mocks não perceberam. A data agora é preenchida em um `@PrePersist`, que roda já no `save`, truncada em
 microssegundos (a precisão do `TIMESTAMP` do PostgreSQL) para o `POST` e o `GET` devolverem o mesmo valor.
 
+## Docker e CI
+
+**Imagem (`Dockerfile`, multi-stage).**
+- O estágio de build compila com o JDK e gera o jar. Copia o `pom.xml` antes do código, então as dependências ficam em
+  cache enquanto o `pom.xml` não muda.
+- O jar é separado em camadas (dependências, loader e aplicação). Uma mudança só no código reaproveita a camada de
+  dependências.
+- A imagem final tem só o JRE, sem Maven e sem código-fonte. Roda com um usuário sem privilégios de root, com o perfil
+  `prod`, que lê a conexão de `DB_URL`, `DB_USER` e `DB_PASSWORD`, e com um `HEALTHCHECK` no readiness do Actuator.
+- O `.dockerignore` deixa o `.env` fora do contexto de build, para nenhum segredo parar na imagem.
+
+**Pipeline (`.github/workflows/ci.yml`).** Roda em todo PR e em todo push na `main`, em dois jobs:
+
+1. **Build e testes:** `./mvnw verify` com todos os testes (os de integração usam o Docker do runner) e a verificação
+   de cobertura do JaCoCo. Publica o relatório de cobertura como artefato e, se algo falhar, os relatórios dos testes.
+2. **Build da imagem Docker:** só roda se o primeiro passar. Confere que a imagem continua sendo construída, sem
+   publicar em registry, com cache de camadas entre execuções.
+
+O workflow tem só permissão de leitura no repositório, e um push novo cancela a execução anterior da mesma branch.
+
+**Dependabot (`.github/dependabot.yml`).** Abre PRs semanais de atualização para as dependências Maven, as GitHub
+Actions e as imagens base do Docker. Agrupa as atualizações relacionadas, como os artefatos do Spring Boot num PR só.
+Cada PR passa pelo CI antes do merge.
+
 ## Próximos passos
 
-- Dockerfile multi-stage da API, Docker Compose com healthcheck do banco, Actuator, GitHub Actions e Dependabot.
 - Autenticação e autorização usando os papéis de `project_members`.
